@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Invoice Audit Tool</title>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; background: #eef3f7; margin: 0; padding: 0; }
+    header { background: #1e88e5; padding: 1rem 2rem; color: white; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    main { max-width: 800px; margin: 2rem auto; background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); }
+    h1 { margin: 0; }
+    input[type="file"] { margin: 1rem 0; padding: 0.5rem; border: 1px solid #ccc; border-radius: 6px; }
+    #status { font-style: italic; color: #888; }
+    #result { margin-top: 1rem; padding: 1rem; background: #fdfdfd; border-radius: 8px; border: 1px solid #ddd; }
+    #preview { margin: 1rem 0; max-width: 100%; border: 1px solid #ccc; border-radius: 6px; display: none; }
+    .progress-bar { margin-top: 1rem; background: #ccc; border-radius: 5px; overflow: hidden; }
+    .progress-fill { height: 20px; background: #1e88e5; width: 0; text-align: center; color: white; font-size: 0.9rem; line-height: 20px; transition: width 1s ease-in-out; }
+    .highlight { background-color: #ffffcc; padding: 2px 4px; border-radius: 4px; font-family: monospace; }
+    .risk-high { color: #e53935; font-weight: bold; }
+    .risk-medium { color: #f57c00; font-weight: bold; }
+    .risk-low { color: #43a047; font-weight: bold; }
+    button { padding: 0.6rem 1.2rem; margin-top: 1rem; background: #1e88e5; color: white; border: none; border-radius: 5px; font-size: 1rem; cursor: pointer; transition: background 0.3s; }
+    button:hover { background: #1565c0; }
+    #download-btn { display: none; }
+  </style>
+</head>
+<body>
+  <header><h1>🧾 Invoice Compliance Audit</h1></header>
+  <main>
+    <p>Upload an image or PDF of your invoice to check for key compliance markers under CPA 2019.</p>
+    <input type="file" id="upload" accept="image/*,.pdf" />
+    <img id="preview" alt="Invoice Preview" />
+    <div id="status" class="loading"></div>
+    <div id="result"></div>
+    <div class="progress-bar"><div id="progress" class="progress-fill">0%</div></div>
+    <button id="download-btn">📄 Download Report</button>
+  </main>
+  <script>
+    const upload = document.getElementById('upload');
+    const preview = document.getElementById('preview');
+    const resultDiv = document.getElementById('result');
+    const statusDiv = document.getElementById('status');
+    const downloadBtn = document.getElementById('download-btn');
+    const progressBar = document.getElementById('progress');
+    const rules = [
+      { desc: 'GSTIN present', pattern: /(GST(IN)?)[\s:]*\d{2}[A-Z]{5}\d{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}/, points: 10, penalty: 10 },
+      { desc: 'Itemized price breakdown', pattern: /(MRP|Rate|Qty|Total)/i, points: 5, penalty: 5 },
+      { desc: 'Return or Refund Policy Mentioned', pattern: /(return|refund|exchange)/i, points: 10, penalty: 10 },
+      { desc: 'Invoice date and seller name', pattern: /(Date\s*[:\-]?\s*\d{2}[^\w]\d{2}[^\w]\d{4}|Invoice.*Date|Name.*:)/i, points: 5, penalty: 5 }
+    ];
+    upload.addEventListener('change', async () => {
+      const file = upload.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const imageDataUrl = e.target.result;
+        preview.src = imageDataUrl;
+        preview.style.display = 'block';
+        statusDiv.textContent = '⏳ Running OCR and analyzing...';
+        resultDiv.innerHTML = '';
+        downloadBtn.style.display = 'none';
+        progressBar.style.width = '0%';
+        progressBar.textContent = '0%';
+        Tesseract.recognize(imageDataUrl, 'eng')
+          .progress(m => {
+            if (m.status === 'recognizing text') {
+              const pct = Math.round(m.progress * 100);
+              progressBar.style.width = pct + '%';
+              progressBar.textContent = pct + '%';
+            }
+          })
+          .then(({ data: { text } }) => {
+            statusDiv.textContent = '';
+            let totalScore = 0;
+            let findings = '<h3 class="section-title">📋 Audit Results</h3><ul>';
+            rules.forEach(rule => {
+              const match = text.match(rule.pattern);
+              if (match) {
+                findings += `<li>✅ ${rule.desc}<br><span class="highlight">${match[0]}</span></li>`;
+                totalScore += rule.points;
+              } else {
+                findings += `<li>❌ ${rule.desc} <em>(missing)</em></li>`;
+                totalScore -= rule.penalty;
+              }
+            });
+            findings += '</ul>';
+            let risk = '🟢 Low Risk — Fully Compliant';
+            let cssClass = 'risk-low';
+            if (totalScore < 20) { risk = '🔴 High Risk — Non-Compliant'; cssClass = 'risk-high'; }
+            else if (totalScore < 35) { risk = '🟠 Medium Risk — Partial Compliance'; cssClass = 'risk-medium'; }
+            findings += `<p class="${cssClass}"><strong>Total Score: ${totalScore}/40</strong><br>Status: ${risk}</p>`;
+            resultDiv.innerHTML = findings;
+            downloadBtn.style.display = 'inline-block';
+          });
+      };
+      reader.readAsDataURL(file);
+    });
+    downloadBtn.addEventListener('click', () => {
+      const blob = new Blob([resultDiv.innerText], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'audit-report.txt';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>
